@@ -38,7 +38,7 @@ async fn main() {
         .and_then(handle_request);
 
     warp::serve(hello)
-        .run(([127, 0, 0, 1], 3030))
+        .run(([127, 0, 0, 1], 3000))
         .await
 
 }
