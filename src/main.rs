@@ -1,24 +1,26 @@
 use std::convert::Infallible;
-use std::io::Read;
-use std::collections::HashMap;
 
 use warp::Filter;
-use libvips::{VipsApp,VipsImage, ops};
+use serde_derive::{Deserialize};
+use libvips::{VipsApp, ops};
 
-async fn handle_request(json: HashMap<String, String>) -> Result<impl warp::Reply, Infallible> {
-    let url = json.get("url").unwrap();
+#[derive(Debug, Deserialize)]
+struct ThumbOptions {
+    url: String,
+    width: Option<i32>
+}
 
-    let file = ureq::get(url)
-        .call();
+async fn handle_request(opts: ThumbOptions) -> Result<impl warp::Reply, Infallible> {
+    let file = reqwest::get(&opts.url)
+        .await
+        .expect("Async download err")
+        .bytes()
+        .await
+        .expect("Byte convert err");
 
-    let mut reader = file.into_reader();
-    let mut bytes = vec![];
-    reader.read_to_end(&mut bytes).expect("Failed to read");
-    println!("Reading buffer into vips");
-    let image = VipsImage::image_new_from_buffer(&bytes, "").unwrap();
-    println!("Resizing ops");
-    let resized = ops::resize(&image, 0.3).unwrap();
-    println!("Writing to buffer");
+    let width = opts.width.unwrap_or(180);
+
+    let resized = ops::thumbnail_buffer(&file, width).unwrap();
     let resized_image = resized.image_write_to_buffer(".png").unwrap();
 
     Ok(warp::http::Response::builder()
@@ -29,11 +31,10 @@ async fn handle_request(json: HashMap<String, String>) -> Result<impl warp::Repl
 #[tokio::main]
 async fn main() {
     let app = VipsApp::new("Test Libvips", false).expect("Cannot initialize libvips");
-    app.concurrency_set(2);
+    app.concurrency_set(20);
     // POST /
-    let hello = warp::post()
-        .and(warp::path::end())
-        .and(warp::body::json())
+    let hello = warp::path("thumbnail")
+        .and(warp::query::<ThumbOptions>())
         .and_then(handle_request);
 
     warp::serve(hello)
