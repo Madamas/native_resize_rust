@@ -2,12 +2,16 @@ use std::convert::Infallible;
 use std::collections::HashMap;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server, StatusCode, Method};
-use libvips::{VipsApp, ops};
+use image::GenericImageView;
+use image::ColorType;
+use image::imageops::FilterType;
+use std::io::BufWriter;
+
 
 #[derive(Debug)]
 struct ThumbOptions {
     url: String,
-    width: i32
+    width: u32
 }
 
 impl ThumbOptions {
@@ -17,8 +21,8 @@ impl ThumbOptions {
             None => String::from("")
         };
 
-        let width: i32 = match opts.get("width") {
-            Some(val) => val.parse::<i32>().unwrap(),
+        let width: u32 = match opts.get("width") {
+            Some(val) => val.parse::<u32>().unwrap(),
             None => 180
         };
 
@@ -50,8 +54,9 @@ impl From<&str> for ThumbOptions {
     }
 }
 
-async fn handle_thumbnail(opts: ThumbOptions) -> Result<Vec<u8>, hyper::Error> {
-    let file = reqwest::get(&opts.url)
+async fn handle_thumbnail(opts: ThumbOptions, req_client: reqwest::Client) -> Result<Vec<u8>, hyper::Error> {
+    let file = req_client.get(&opts.url)
+        .send()
         .await
         .expect("Async download err")
         .bytes()
@@ -59,19 +64,37 @@ async fn handle_thumbnail(opts: ThumbOptions) -> Result<Vec<u8>, hyper::Error> {
         .expect("Byte convert err");
 
     let width = opts.width;
+    let image = image::load_from_memory_with_format(&file, image::ImageFormat::Png).unwrap();
+    let original_width = image.width();
+    let ratio = original_width / width;
+    let original_height = image.height();
+    let height = original_height / ratio;
 
-    let resized = ops::thumbnail_buffer(&file, width).unwrap();
+    println!("Original h={:?} and w={:?}", original_height, original_width);
+    println!("Ratio = {:?}", ratio);
+    println!("h={:?} and w={:?} to be", height, width);
 
-    Ok(resized.image_write_to_buffer(".png").unwrap())
+    let resized = image::imageops::resize(&image, width, height, FilterType::Nearest);
+    let mut bytes: Vec<u8> = vec![];
+    let fout = &mut BufWriter::new(&mut bytes);
+    image::png::PNGEncoder::new(fout).encode(&resized, width, height, ColorType::Rgba8).unwrap();
+    //
+    // image::save_buffer("haha.png", &resized, width, height, ColorType::Rgba8).unwrap();
+    // ^ - this works
+    // let resized = ops::thumbnail_buffer(&file, width).expect("Error while creating buffer thumb");
+
+    Ok(resized.to_vec())
 }
 
 async fn router(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
     let uri = req.uri();
+    let client = reqwest::Client::new();
+
     match (req.method(), uri.path()) {
         (&Method::GET, "/thumbnail") => {
             let q = uri.query().unwrap();
 
-            let thumb = handle_thumbnail(ThumbOptions::from(q))
+            let thumb = handle_thumbnail(ThumbOptions::from(q), client)
                 .await?;
 
             let response = Response::builder()
@@ -91,9 +114,6 @@ async fn router(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let app = VipsApp::new("Test Libvips", false).expect("Cannot initialize libvips");
-    app.concurrency_set(20);
-
     let make_svc = make_service_fn(|_conn| {
         // This is the `Service` that will handle the connection.
         // `service_fn` is a helper to convert a function that
