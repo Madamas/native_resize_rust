@@ -2,9 +2,7 @@ use std::convert::Infallible;
 use std::collections::HashMap;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server, StatusCode, Method};
-use image::GenericImageView;
-use image::ColorType;
-use image::imageops::FilterType;
+use image::{GenericImageView, ColorType, imageops::FilterType};
 use std::io::BufWriter;
 
 
@@ -70,20 +68,12 @@ async fn handle_thumbnail(opts: ThumbOptions, req_client: reqwest::Client) -> Re
     let original_height = image.height();
     let height = original_height / ratio;
 
-    println!("Original h={:?} and w={:?}", original_height, original_width);
-    println!("Ratio = {:?}", ratio);
-    println!("h={:?} and w={:?} to be", height, width);
-
     let resized = image::imageops::resize(&image, width, height, FilterType::Nearest);
     let mut bytes: Vec<u8> = vec![];
-    let fout = &mut BufWriter::new(&mut bytes);
+    let fout = BufWriter::new(&mut bytes);
     image::png::PNGEncoder::new(fout).encode(&resized, width, height, ColorType::Rgba8).unwrap();
-    //
-    // image::save_buffer("haha.png", &resized, width, height, ColorType::Rgba8).unwrap();
-    // ^ - this works
-    // let resized = ops::thumbnail_buffer(&file, width).expect("Error while creating buffer thumb");
 
-    Ok(resized.to_vec())
+    Ok(bytes)
 }
 
 async fn router(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
@@ -115,9 +105,6 @@ async fn router(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let make_svc = make_service_fn(|_conn| {
-        // This is the `Service` that will handle the connection.
-        // `service_fn` is a helper to convert a function that
-        // returns a Response into a `Service`.
         async { Ok::<_, Infallible>(service_fn(router)) }
     });
 
