@@ -1,13 +1,15 @@
 use std::convert::Infallible;
 use std::collections::HashMap;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Request, Response, Server, StatusCode, Method};
-use libvips::{VipsApp, ops};
+use hyper::{Body, Request, Response, Server, StatusCode, Method, Client};
+use libvips::{VipsApp, ops, VipsImage};
+use hyper::client::HttpConnector;
+use std::io::BufWriter;
 
 #[derive(Debug)]
 struct ThumbOptions {
     url: String,
-    width: i32
+    width: f64
 }
 
 impl ThumbOptions {
@@ -17,9 +19,9 @@ impl ThumbOptions {
             None => String::from("")
         };
 
-        let width: i32 = match opts.get("width") {
-            Some(val) => val.parse::<i32>().unwrap(),
-            None => 180
+        let width: f64 = match opts.get("width") {
+            Some(val) => val.parse::<f64>().unwrap(),
+            None => 180.0
         };
 
         ThumbOptions {
@@ -50,28 +52,31 @@ impl From<&str> for ThumbOptions {
     }
 }
 
-async fn handle_thumbnail(opts: ThumbOptions) -> Result<Vec<u8>, hyper::Error> {
-    let file = reqwest::get(&opts.url)
-        .await
-        .expect("Async download err")
-        .bytes()
-        .await
-        .expect("Byte convert err");
+async fn handle_thumbnail(opts: ThumbOptions, client: &hyper::Client<HttpConnector>) -> Result<Vec<u8>, hyper::Error> {
+    let req = Request::get(opts.url).body(Body::empty()).unwrap();
+
+    let res = client.request(req).await?.into_body();
+    let bytes = hyper::body::aggregate(res).await?;
+    let mut file: Vec<u8> = vec![];
+    let fout = BufWriter::new(&mut bytes);
 
     let width = opts.width;
+    let image = VipsImage::image_new_from_buffer(&file, "").unwrap();
+    let original_width: f64 = image.get_width().into();
+    let scale: f64 = (width / original_width).into();
 
-    let resized = ops::thumbnail_buffer(&file, width).unwrap();
+    let resized = ops::resize(&image, scale).unwrap();
 
     Ok(resized.image_write_to_buffer(".png").unwrap())
 }
 
-async fn router(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
+async fn router(req: Request<Body>, client: hyper::Client<HttpConnector>) -> Result<Response<Body>, hyper::Error> {
     let uri = req.uri();
     match (req.method(), uri.path()) {
         (&Method::GET, "/thumbnail") => {
             let q = uri.query().unwrap();
 
-            let thumb = handle_thumbnail(ThumbOptions::from(q))
+            let thumb = handle_thumbnail(ThumbOptions::from(q), &client)
                 .await?;
 
             let response = Response::builder()
@@ -93,12 +98,15 @@ async fn router(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
 pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let app = VipsApp::new("Test Libvips", false).expect("Cannot initialize libvips");
     app.concurrency_set(20);
-
+    let client = Client::new();
+    
     let make_svc = make_service_fn(|_conn| {
-        // This is the `Service` that will handle the connection.
-        // `service_fn` is a helper to convert a function that
-        // returns a Response into a `Service`.
-        async { Ok::<_, Infallible>(service_fn(router)) }
+        let client = client.clone();
+        async { Ok::<_, Infallible>(service_fn(|req: Request<Body>| async {
+            router(req, client.to_owned())
+            .await
+        })) 
+        }
     });
 
     let addr = ([127, 0, 0, 1], 3000).into();
