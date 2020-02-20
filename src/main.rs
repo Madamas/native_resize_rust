@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server, StatusCode, Method};
 use libvips::{VipsApp, ops, VipsImage};
+use std::borrow::Cow;
 
 #[derive(Debug)]
 struct ThumbOptions {
@@ -50,10 +51,11 @@ impl From<&str> for ThumbOptions {
     }
 }
 
-async fn handle_thumbnail(opts: ThumbOptions) -> Result<Vec<u8>, hyper::Error> {
-    let file = reqwest::get(&opts.url)
+async fn handle_thumbnail(opts: ThumbOptions, client: Cow<'_, reqwest::Client>) -> Result<Vec<u8>, hyper::Error> {
+    let file = client.get(&opts.url)
+        .send()
         .await
-        .expect("Async download err")
+        .expect("Failed sending request")
         .bytes()
         .await
         .expect("Bytes unwrap err");
@@ -68,13 +70,13 @@ async fn handle_thumbnail(opts: ThumbOptions) -> Result<Vec<u8>, hyper::Error> {
     Ok(resized.image_write_to_buffer(".png").unwrap())
 }
 
-async fn router(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
+async fn router(req: Request<Body>, client: Cow<'_, reqwest::Client>) -> Result<Response<Body>, hyper::Error> {
     let uri = req.uri();
     match (req.method(), uri.path()) {
         (&Method::GET, "/thumbnail") => {
             let q = uri.query().unwrap();
 
-            let thumb = handle_thumbnail(ThumbOptions::from(q))
+            let thumb = handle_thumbnail(ThumbOptions::from(q), client)
                 .await?;
 
             let response = Response::builder()
@@ -97,8 +99,17 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let app = VipsApp::new("Test Libvips", false).expect("Cannot initialize libvips");
     app.concurrency_set(20);
 
+    let client: Cow<reqwest::Client> = Cow::Owned(reqwest::Client::new());
+
     let make_svc = make_service_fn(|_conn| {
-        async { Ok::<_, Infallible>(service_fn(router)) }
+        let fclone = client.clone();
+        async { 
+            let clone = fclone.into_owned();
+
+            Ok::<_, Infallible>(service_fn(move |req| {
+                router(req, Cow::Owned(clone.to_owned()))
+            })) 
+        }
     });
 
     let addr = ([127, 0, 0, 1], 3000).into();
