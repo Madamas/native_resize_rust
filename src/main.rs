@@ -2,13 +2,13 @@ use std::convert::Infallible;
 use std::collections::HashMap;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server, StatusCode, Method};
-use libvips::{VipsApp, ops};
+use libvips::{VipsApp, ops, VipsImage};
 use std::borrow::Cow;
 
 #[derive(Debug)]
 struct ThumbOptions {
     url: String,
-    width: i32
+    width: f64
 }
 
 impl ThumbOptions {
@@ -18,9 +18,9 @@ impl ThumbOptions {
             None => String::from("")
         };
 
-        let width: i32 = match opts.get("width") {
-            Some(val) => val.parse::<i32>().unwrap(),
-            None => 180
+        let width: f64 = match opts.get("width") {
+            Some(val) => val.parse::<f64>().unwrap(),
+            None => 180.0
         };
 
         ThumbOptions {
@@ -58,11 +58,14 @@ async fn handle_thumbnail(opts: ThumbOptions, client: Cow<'_, reqwest::Client>) 
         .expect("Failed sending request")
         .bytes()
         .await
-        .expect("Failed getting bytes");
+        .expect("Bytes unwrap err");
 
     let width = opts.width;
+    let image = VipsImage::image_new_from_buffer(&file, "").unwrap();
+    let original_width: f64 = image.get_width().into();
+    let scale: f64 = (width / original_width).into();
 
-    let resized = ops::thumbnail_buffer(&file, width).unwrap();
+    let resized = ops::resize(&image, scale).unwrap();
 
     Ok(resized.image_write_to_buffer(".png").unwrap())
 }
