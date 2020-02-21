@@ -51,7 +51,7 @@ impl From<&str> for ThumbOptions {
     }
 }
 
-async fn handle_thumbnail(opts: ThumbOptions, client: Cow<'_, reqwest::Client>) -> Result<Vec<u8>, hyper::Error> {
+async fn handle_thumbnail(opts: ThumbOptions, client: reqwest::Client) -> Result<Vec<u8>, hyper::Error> {
     let file = client.get(&opts.url)
         .send()
         .await
@@ -70,7 +70,7 @@ async fn handle_thumbnail(opts: ThumbOptions, client: Cow<'_, reqwest::Client>) 
     Ok(resized.image_write_to_buffer(".png").unwrap())
 }
 
-async fn router(req: Request<Body>, client: Cow<'_, reqwest::Client>) -> Result<Response<Body>, hyper::Error> {
+async fn router(req: Request<Body>, client: reqwest::Client) -> Result<Response<Body>, hyper::Error> {
     let uri = req.uri();
     match (req.method(), uri.path()) {
         (&Method::GET, "/thumbnail") => {
@@ -99,15 +99,16 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let app = VipsApp::new("Test Libvips", false).expect("Cannot initialize libvips");
     app.concurrency_set(20);
 
-    let client: Cow<reqwest::Client> = Cow::Owned(reqwest::Client::new());
+    let client: reqwest::Client = reqwest::Client::new();
+    let cow_client: Cow<reqwest::Client> = Cow::Owned(client);
 
     let make_svc = make_service_fn(|_conn| {
-        let fclone = client.clone();
+        let cow_client = cow_client.clone();
         async { 
-            let clone = fclone.into_owned();
+            let clone = cow_client.into_owned();
 
             Ok::<_, Infallible>(service_fn(move |req| {
-                router(req, Cow::Owned(clone.to_owned()))
+                router(req, clone.to_owned())
             })) 
         }
     });
