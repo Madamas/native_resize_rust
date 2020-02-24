@@ -2,13 +2,15 @@ use std::convert::Infallible;
 use std::collections::HashMap;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server, StatusCode, Method};
-use libvips::{VipsApp, ops, VipsImage};
+use image::{GenericImageView, ColorType, imageops::FilterType};
+use std::io::BufWriter;
 use std::borrow::Cow;
+use std::time::Instant;
 
 #[derive(Debug)]
 struct ThumbOptions {
     url: String,
-    width: f64
+    width: u32
 }
 
 impl ThumbOptions {
@@ -18,9 +20,9 @@ impl ThumbOptions {
             None => String::from("")
         };
 
-        let width: f64 = match opts.get("width") {
-            Some(val) => val.parse::<f64>().unwrap(),
-            None => 180.0
+        let width: u32 = match opts.get("width") {
+            Some(val) => val.parse::<u32>().unwrap(),
+            None => 180
         };
 
         ThumbOptions {
@@ -51,7 +53,10 @@ impl From<&str> for ThumbOptions {
     }
 }
 
-async fn handle_thumbnail(opts: ThumbOptions, client: reqwest::Client) -> Result<Vec<u8>, hyper::Error> {
+async fn handle_thumbnail(opts: ThumbOptions, client: reqwest::Client) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    #[cfg(debug_assertions)]
+    let download_start = Instant::now();
+
     let file = client.get(&opts.url)
         .send()
         .await
@@ -59,25 +64,45 @@ async fn handle_thumbnail(opts: ThumbOptions, client: reqwest::Client) -> Result
         .bytes()
         .await
         .expect("Bytes unwrap err");
+    
+    #[cfg(debug_assertions)]
+    let download_duration = download_start.elapsed();
+    #[cfg(debug_assertions)]
+    println!("Download duration is {:?}", download_duration);
+
+    #[cfg(debug_assertions)]
+    let render_start = Instant::now();
 
     let width = opts.width;
-    let image = VipsImage::image_new_from_buffer(&file, "").unwrap();
-    let original_width: f64 = image.get_width().into();
-    let scale: f64 = (width / original_width).into();
+    let image = image::load_from_memory_with_format(&file, image::ImageFormat::Png).unwrap();
+    let original_width = image.width();
+    let ratio = original_width / width;
+    let original_height = image.height();
+    let height = original_height / ratio;
 
-    let resized = ops::resize(&image, scale).unwrap();
+    let resized = image::imageops::resize(&image, width, height, FilterType::Nearest);
+    let mut bytes: Vec<u8> = vec![];
+    let fout = BufWriter::new(&mut bytes);
+    image::png::PNGEncoder::new(fout).encode(&resized, width, height, ColorType::Rgba8).unwrap();
 
-    Ok(resized.image_write_to_buffer(".png").unwrap())
+    #[cfg(debug_assertions)]
+    let render_duration = render_start.elapsed();
+    #[cfg(debug_assertions)]
+    println!("Render duration {:?}", render_duration);
+
+    Ok(bytes)
 }
 
 async fn router(req: Request<Body>, client: reqwest::Client) -> Result<Response<Body>, hyper::Error> {
     let uri = req.uri();
+
     match (req.method(), uri.path()) {
         (&Method::GET, "/thumbnail") => {
             let q = uri.query().unwrap();
 
             let thumb = handle_thumbnail(ThumbOptions::from(q), client)
-                .await?;
+                .await
+                .expect("Handling did not go that well");
 
             let response = Response::builder()
                 .status(StatusCode::OK)
@@ -96,9 +121,6 @@ async fn router(req: Request<Body>, client: reqwest::Client) -> Result<Response<
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let app = VipsApp::new("Test Libvips", false).expect("Cannot initialize libvips");
-    app.concurrency_set(20);
-
     let client: reqwest::Client = reqwest::Client::new();
     let cow_client: Cow<reqwest::Client> = Cow::Owned(client);
 

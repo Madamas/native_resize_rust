@@ -7,7 +7,7 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-libvips = "1.1.5"
 hyper = "0.13"
 tokio = { version = "0.2", features = ["full"] }
 reqwest = "0.10.1"
+image = "0.23.0"
