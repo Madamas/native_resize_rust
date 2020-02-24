@@ -4,7 +4,7 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server, StatusCode, Method};
 use image::{GenericImageView, ColorType, imageops::FilterType};
 use std::io::BufWriter;
-
+use std::borrow::Cow;
 
 #[derive(Debug)]
 struct ThumbOptions {
@@ -52,14 +52,14 @@ impl From<&str> for ThumbOptions {
     }
 }
 
-async fn handle_thumbnail(opts: ThumbOptions, req_client: reqwest::Client) -> Result<Vec<u8>, hyper::Error> {
-    let file = req_client.get(&opts.url)
+async fn handle_thumbnail(opts: ThumbOptions, client: reqwest::Client) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let file = client.get(&opts.url)
         .send()
         .await
-        .expect("Async download err")
+        .expect("Failed sending request")
         .bytes()
         .await
-        .expect("Byte convert err");
+        .expect("Bytes unwrap err");
 
     let width = opts.width;
     let image = image::load_from_memory_with_format(&file, image::ImageFormat::Png).unwrap();
@@ -76,7 +76,7 @@ async fn handle_thumbnail(opts: ThumbOptions, req_client: reqwest::Client) -> Re
     Ok(bytes)
 }
 
-async fn router(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
+async fn router(req: Request<Body>, client: reqwest::Client) -> Result<Response<Body>, hyper::Error> {
     let uri = req.uri();
     let client = reqwest::Client::new();
 
@@ -104,8 +104,17 @@ async fn router(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let client: reqwest::Client = reqwest::Client::new();
+    let cow_client: Cow<reqwest::Client> = Cow::Owned(client);    
     let make_svc = make_service_fn(|_conn| {
-        async { Ok::<_, Infallible>(service_fn(router)) }
+        let cow_client = cow_client.clone();
+        async { 
+            let clone = cow_client.into_owned();
+
+            Ok::<_, Infallible>(service_fn(move |req| {
+                router(req, clone.to_owned())
+            })) 
+        }
     });
 
     let addr = ([127, 0, 0, 1], 3000).into();
