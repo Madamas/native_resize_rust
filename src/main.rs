@@ -5,7 +5,8 @@ use hyper::{Body, Request, Response, Server, StatusCode, Method};
 use image::{GenericImageView, ColorType, imageops::FilterType};
 use std::io::BufWriter;
 use std::borrow::Cow;
-use std::time::Instant;
+
+type HyperHttpsConnector = hyper_tls::HttpsConnector<hyper::client::HttpConnector>;
 
 #[derive(Debug)]
 struct ThumbOptions {
@@ -53,25 +54,13 @@ impl From<&str> for ThumbOptions {
     }
 }
 
-async fn handle_thumbnail(opts: ThumbOptions, client: reqwest::Client) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    #[cfg(debug_assertions)]
-    let download_start = Instant::now();
+async fn handle_thumbnail(opts: ThumbOptions, client: hyper::Client<HyperHttpsConnector>) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let uri: hyper::http::Uri = opts.url.parse()?;
 
-    let file = client.get(&opts.url)
-        .send()
-        .await
-        .expect("Failed sending request")
-        .bytes()
-        .await
-        .expect("Bytes unwrap err");
-    
-    #[cfg(debug_assertions)]
-    let download_duration = download_start.elapsed();
-    #[cfg(debug_assertions)]
-    println!("Download duration is {:?}", download_duration);
+    let response = client.get(uri)
+        .await?;
 
-    #[cfg(debug_assertions)]
-    let render_start = Instant::now();
+    let file = hyper::body::to_bytes(response).await?;
 
     let width = opts.width;
     let image = image::load_from_memory_with_format(&file, image::ImageFormat::Png).unwrap();
@@ -85,15 +74,10 @@ async fn handle_thumbnail(opts: ThumbOptions, client: reqwest::Client) -> Result
     let fout = BufWriter::new(&mut bytes);
     image::png::PNGEncoder::new(fout).encode(&resized, width, height, ColorType::Rgba8).unwrap();
 
-    #[cfg(debug_assertions)]
-    let render_duration = render_start.elapsed();
-    #[cfg(debug_assertions)]
-    println!("Render duration {:?}", render_duration);
-
     Ok(bytes)
 }
 
-async fn router(req: Request<Body>, client: reqwest::Client) -> Result<Response<Body>, hyper::Error> {
+async fn router(req: Request<Body>, client: hyper::Client<HyperHttpsConnector>) -> Result<Response<Body>, hyper::Error> {
     let uri = req.uri();
 
     match (req.method(), uri.path()) {
@@ -121,8 +105,10 @@ async fn router(req: Request<Body>, client: reqwest::Client) -> Result<Response<
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let client: reqwest::Client = reqwest::Client::new();
-    let cow_client: Cow<reqwest::Client> = Cow::Owned(client);
+    let https_connector = hyper_tls::HttpsConnector::new();
+    let client: hyper::Client<HyperHttpsConnector> = hyper::Client::builder()
+        .build::<_, hyper::Body>(https_connector);
+    let cow_client: Cow<hyper::Client<HyperHttpsConnector>> = Cow::Owned(client);
 
     let make_svc = make_service_fn(|_conn| {
         let cow_client = cow_client.clone();
