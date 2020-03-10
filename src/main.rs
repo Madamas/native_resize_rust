@@ -5,7 +5,8 @@ use hyper::{Body, Request, Response, Server, StatusCode, Method};
 use image::{GenericImageView, ColorType, imageops::FilterType};
 use std::io::BufWriter;
 use std::borrow::Cow;
-use std::time::Instant;
+
+mod custom;
 
 #[derive(Debug)]
 struct ThumbOptions {
@@ -54,9 +55,6 @@ impl From<&str> for ThumbOptions {
 }
 
 async fn handle_thumbnail(opts: ThumbOptions, client: reqwest::Client) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    #[cfg(debug_assertions)]
-    let download_start = Instant::now();
-
     let file = client.get(&opts.url)
         .send()
         .await
@@ -64,14 +62,6 @@ async fn handle_thumbnail(opts: ThumbOptions, client: reqwest::Client) -> Result
         .bytes()
         .await
         .expect("Bytes unwrap err");
-    
-    #[cfg(debug_assertions)]
-    let download_duration = download_start.elapsed();
-    #[cfg(debug_assertions)]
-    println!("Download duration is {:?}", download_duration);
-
-    #[cfg(debug_assertions)]
-    let render_start = Instant::now();
 
     let width = opts.width;
     let image = image::load_from_memory_with_format(&file, image::ImageFormat::Png).unwrap();
@@ -80,15 +70,10 @@ async fn handle_thumbnail(opts: ThumbOptions, client: reqwest::Client) -> Result
     let original_height = image.height();
     let height = original_height / ratio;
 
-    let resized = image::imageops::resize(&image, width, height, FilterType::Nearest);
+    let resized = image::imageops::resize(&image, width, height, FilterType::Triangle);
     let mut bytes: Vec<u8> = vec![];
     let fout = BufWriter::new(&mut bytes);
     image::png::PNGEncoder::new(fout).encode(&resized, width, height, ColorType::Rgba8).unwrap();
-
-    #[cfg(debug_assertions)]
-    let render_duration = render_start.elapsed();
-    #[cfg(debug_assertions)]
-    println!("Render duration {:?}", render_duration);
 
     Ok(bytes)
 }
