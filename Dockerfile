@@ -1,4 +1,4 @@
-FROM rust:1.41.0-slim as builder
+FROM rust:1.42.0 as builder
 
 WORKDIR /opt/thumbnailer_rust
 COPY . /opt/thumbnailer_rust
