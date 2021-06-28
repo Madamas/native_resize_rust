@@ -1,11 +1,12 @@
-use image::{GenericImageView, ColorType, imageops::FilterType};
-use std::io::BufWriter;
+use image::{imageops::FilterType, ColorType, GenericImageView};
+use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::{Arc};
+use std::io::BufWriter;
 
+#[derive(Debug, Deserialize)]
 pub struct ThumbOptions {
     url: String,
-    width: u32
+    width: u32,
 }
 
 impl From<&str> for ThumbOptions {
@@ -19,21 +20,20 @@ impl ThumbOptions {
     pub fn new(opts: HashMap<String, String>) -> ThumbOptions {
         let url: String = match opts.get("url") {
             Some(val) => String::from(val),
-            None => String::from("")
+            None => String::from(""),
         };
 
         let width: u32 = match opts.get("width") {
             Some(val) => val.parse::<u32>().unwrap(),
-            None => 180
+            None => 180,
         };
 
         ThumbOptions {
             url: url,
-            width: width
+            width: width,
         }
     }
 }
-
 
 fn querify(string: &str) -> HashMap<String, String> {
     let mut acc: HashMap<String, String> = HashMap::new();
@@ -49,11 +49,23 @@ fn querify(string: &str) -> HashMap<String, String> {
     acc
 }
 
-pub async fn handle_thumbnail(opts: ThumbOptions, client: Arc<reqwest::Client>) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let file = client.get(&opts.url).send().await?.bytes().await?;
+pub async fn handle_thumbnail(
+    opts: ThumbOptions,
+    client: reqwest::Client,
+) -> Result<Vec<u8>, Box<dyn std::error::Error + 'static>> {
+    println!("123");
+    let file = match client.get(&opts.url).send().await?.bytes().await {
+        Ok(data) => data,
+        Err(err) => return Err(err.into()),
+    };
+
+    println!("321");
 
     if file.len() == 0 {
-        return Err(std::boxed::Box::from(std::io::Error::new(std::io::ErrorKind::InvalidData, "Image data malformed")))
+        return Err(std::boxed::Box::from(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Image data malformed",
+        )));
     }
 
     let width = opts.width;
@@ -72,13 +84,25 @@ pub async fn handle_thumbnail(opts: ThumbOptions, client: Arc<reqwest::Client>) 
     Ok(bytes)
 }
 
-pub fn encode_image(bytes: &mut Vec<u8>, file: &Vec<u8>, width: u32, height: u32, format: image::ImageFormat) -> () {
+pub fn encode_image(
+    bytes: &mut Vec<u8>,
+    file: &Vec<u8>,
+    width: u32,
+    height: u32,
+    format: image::ImageFormat,
+) -> () {
     let mut fout = BufWriter::new(bytes);
-   
+
     match format {
-        image::ImageFormat::Png => image::png::PNGEncoder::new(fout).encode(file, width, height, ColorType::Rgba8).unwrap(),
-        image::ImageFormat::Jpeg => image::jpeg::JPEGEncoder::new(&mut fout).encode(file, width, height, ColorType::Rgba8).unwrap(),
-        image::ImageFormat::Gif => image::gif::Encoder::new(fout).encode(file, width, height, ColorType::Rgba8).unwrap(),
+        image::ImageFormat::Png => image::codecs::png::PngEncoder::new(fout)
+            .encode(file, width, height, ColorType::Rgba8)
+            .unwrap(),
+        image::ImageFormat::Jpeg => image::codecs::jpeg::JpegEncoder::new(&mut fout)
+            .encode(file, width, height, ColorType::Rgba8)
+            .unwrap(),
+        image::ImageFormat::Gif => image::codecs::gif::GifEncoder::new(fout)
+            .encode(file, width, height, ColorType::Rgba8)
+            .unwrap(),
         _ => (),
     }
 }
