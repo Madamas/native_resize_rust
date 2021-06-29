@@ -9,6 +9,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
+      - name: Set outputs
+        id: vars
+        run: echo "::set-output name=sha_short::$(git rev-parse --short HEAD)"
+      - name: Check outputs
+        run: echo ${{ steps.vars.outputs.sha_short }}
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v1
       - name: Set up Docker Buildx
@@ -23,4 +28,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: madamas/rust_resizer:latest
+          tags: madamas/rust_resizer:${{ steps.vars.outputs.sha_short }}
